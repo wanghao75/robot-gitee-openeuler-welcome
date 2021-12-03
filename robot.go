@@ -18,7 +18,7 @@ const (
 Hi ***%s***, welcome to the %s Community.
 I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
 If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers bellow.
-%s`
+- %s`
 )
 
 type iClient interface {
@@ -164,7 +164,7 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 
 	return sigName, fmt.Sprintf(
 		welcomeMessage, author, cfg.CommunityName, cfg.CommandLink,
-		sigName, sigName, strings.Join(maintainers, "\n"),
+		sigName, sigName, strings.Join(maintainers, "\n- "),
 	), nil
 }
 

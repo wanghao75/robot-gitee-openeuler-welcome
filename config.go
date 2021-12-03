@@ -96,7 +96,7 @@ func (c *botConfig) parseSigFilePath() error {
 		return fmt.Errorf("invalid sig_file_path:%s", p)
 	}
 
-	v1 := strings.Split(v[1], "/")
+	v1 := strings.Split(v[0], "/")
 	if len(v1) != 3 {
 		return fmt.Errorf("invalid sig_file_path:%s", p)
 	}
