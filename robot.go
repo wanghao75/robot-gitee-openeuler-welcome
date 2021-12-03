@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -11,15 +10,15 @@ import (
 	libplugin "github.com/opensourceways/community-robot-lib/giteeplugin"
 	"github.com/opensourceways/community-robot-lib/utils"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 )
 
 const (
 	botName        = "welcome"
-	welcomeMessage = `Hi ***%s***, welcome to the %s Community.
-I'm the Bot here serving you. You can find the instructions on how to interact with me at
-<%s>.
-If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s),and any of the maintainers: %s`
+	welcomeMessage = `
+Hi ***%s***, welcome to the %s Community.
+I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
+If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers bellow.
+%s`
 )
 
 type iClient interface {
@@ -30,6 +29,7 @@ type iClient interface {
 	GetRepoLabels(owner, repo string) ([]sdk.Label, error)
 	AddPRLabel(org, repo string, number int32, label string) error
 	AddIssueLabel(org, repo, number, label string) error
+	ListCollaborators(org, repo string) ([]sdk.ProjectMember, error)
 }
 
 func newRobot(cli iClient) *robot {
@@ -49,9 +49,11 @@ func (bot *robot) getConfig(cfg libconfig.PluginConfig, org, repo string) (*botC
 	if !ok {
 		return nil, fmt.Errorf("can't convert to configuration")
 	}
+
 	if bc := c.configFor(org, repo); bc != nil {
 		return bc, nil
 	}
+
 	return nil, fmt.Errorf("no config for this repo:%s/%s", org, repo)
 }
 
@@ -66,20 +68,26 @@ func (bot *robot) handlePREvent(e *sdk.PullRequestEvent, pc libconfig.PluginConf
 		return nil
 	}
 
-	pr := giteeclient.GetPRInfoByPREvent(e)
-	cfg, err := bot.getConfig(pc, pr.Org, pr.Repo)
+	org, repo := e.GetRepository().GetOwnerAndRepo()
+	pr := e.GetPullRequest()
+	number := pr.Number
+
+	cfg, err := bot.getConfig(pc, org, repo)
 	if err != nil {
 		return err
 	}
 
-	addMsg := func(comment string) error {
-		return bot.cli.CreatePRComment(pr.Org, pr.Repo, pr.Number, comment)
-	}
-	addLabel := func(label string) error {
-		return bot.cli.AddPRLabel(pr.Org, pr.Repo, pr.Number, label)
-	}
+	return bot.handle(
+		org, repo, pr.GetUser().GetLogin(), cfg, log,
 
-	return bot.handle(pr.Org, pr.Repo, pr.Author, addMsg, addLabel, cfg, log)
+		func(c string) error {
+			return bot.cli.CreatePRComment(org, repo, number, c)
+		},
+
+		func(label string) error {
+			return bot.cli.AddPRLabel(org, repo, number, label)
+		},
+	)
 }
 
 func (bot *robot) handleIssueEvent(e *sdk.IssueEvent, pc libconfig.PluginConfig, log *logrus.Entry) error {
@@ -96,116 +104,84 @@ func (bot *robot) handleIssueEvent(e *sdk.IssueEvent, pc libconfig.PluginConfig,
 
 	author := ew.GetIssueAuthor()
 	number := ew.GetIssueNumber()
-	addMsg := func(comment string) error {
-		return bot.cli.CreateIssueComment(org, repo, number, comment)
-	}
-	addLabel := func(label string) error {
-		return bot.cli.AddIssueLabel(org, repo, number, label)
-	}
 
-	return bot.handle(org, repo, author, addMsg, addLabel, cfg, log)
+	return bot.handle(
+		org, repo, author, cfg, log,
+
+		func(c string) error {
+			return bot.cli.CreateIssueComment(org, repo, number, c)
+		},
+
+		func(label string) error {
+			return bot.cli.AddIssueLabel(org, repo, number, label)
+		},
+	)
 }
 
 func (bot *robot) handle(
 	org, repo, author string,
-	addMsg, addLabel func(string) error,
 	cfg *botConfig, log *logrus.Entry,
+	addMsg, addLabel func(string) error,
 ) error {
-	sigName := bot.repoSigName(org, repo, cfg, log)
-	if sigName == "" {
-		return fmt.Errorf("cant get sig name by %s/%s", org, repo)
+	sigName, comment, err := bot.genComment(org, repo, author, cfg)
+	if err != nil {
+		return err
 	}
 
 	mErr := utils.NewMultiErrors()
-	if comment := bot.genWelcomeMsg(author, sigName, cfg, log); comment != "" {
-		mErr.AddError(addMsg(comment))
+
+	if err := addMsg(comment); err != nil {
+		mErr.AddError(err)
 	}
 
 	label := fmt.Sprintf("sig/%s", sigName)
+
 	if err := bot.createLabelIfNeed(org, repo, label); err != nil {
-		log.WithError(err).Errorf("create repo label: %s", label)
+		log.Errorf("create repo label:%s, err:%s", label, err.Error())
 	}
 
-	mErr.AddError(addLabel(label))
+	if err := addLabel(label); err != nil {
+		mErr.AddError(err)
+	}
 
 	return mErr.Err()
 }
 
-func (bot robot) genWelcomeMsg(author, sigName string, cfg *botConfig, log *logrus.Entry) string {
-	v, err := bot.getMaintainers(sigName, cfg)
+func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, string, error) {
+	sigName, err := bot.getSigOfRepo(repo, cfg)
 	if err != nil {
-		log.Error(err)
-		return ""
+		return "", "", err
 	}
 
-	maintainerMsg := ""
-	if len(v) > 0 {
-		maintainerMsg = fmt.Sprintf("**@%s**", strings.Join(v, "** ,**@"))
+	if sigName == "" {
+		return "", "", fmt.Errorf("cant get sig name of repo: %s/%s", org, repo)
 	}
 
-	return fmt.Sprintf(welcomeMessage, author, cfg.CommunityName, cfg.CommandLink, sigName, sigName, maintainerMsg)
+	maintainers, err := bot.getMaintainers(org, repo)
+	if err != nil {
+		return "", "", err
+	}
+
+	return sigName, fmt.Sprintf(
+		welcomeMessage, author, cfg.CommunityName, cfg.CommandLink,
+		sigName, sigName, strings.Join(maintainers, "\n"),
+	), nil
 }
 
-func (bot robot) repoSigName(org, repo string, cfg *botConfig, log *logrus.Entry) string {
-	c, err := bot.getPathContent(cfg.CommunityName, cfg.CommunityRepository, cfg.SigFilePath)
-	if err != nil {
-		log.Error(err)
-		return ""
-	}
-
-	// intercept the sig configuration item string containing a repository full path from the sig yaml file
-	s := string(c)
-	keyOfName := "- name: "
-	path := fmt.Sprintf("%s/%s", org, repo)
-	repoSigConfig := interceptString(s, keyOfName, path)
-	if repoSigConfig == "" {
-		return ""
-	}
-
-	// intercept the sig name
-	keyOfRepos := "repositories:"
-	s = interceptString(repoSigConfig, keyOfName, keyOfRepos)
-	if s == "" {
-		return ""
-	}
-
-	s = strings.TrimPrefix(s, keyOfName)
-	s = strings.TrimSuffix(s, keyOfRepos)
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "\r\n", "")
-
-	return s
-}
-
-func (bot *robot) getMaintainers(sig string, cfg *botConfig) ([]string, error) {
-	path := fmt.Sprintf("sig/%s/OWNERS", sig)
-	c, err := bot.getPathContent(cfg.CommunityName, cfg.CommunityRepository, path)
+func (bot *robot) getMaintainers(org, repo string) ([]string, error) {
+	v, err := bot.cli.ListCollaborators(org, repo)
 	if err != nil {
 		return nil, err
 	}
 
-	var m struct {
-		Maintainers []string `yaml:"maintainers"`
+	r := make([]string, 0, len(v))
+	for i := range v {
+		p := v[i].Permissions
+		if p != nil && (p.Admin || p.Push) {
+			r = append(r, v[i].Login)
+		}
 	}
-	if err = yaml.Unmarshal(c, &m); err != nil {
-		return nil, err
-	}
-
-	return m.Maintainers, nil
-}
-
-func (bot *robot) getPathContent(owner, repo, path string) ([]byte, error) {
-	content, err := bot.cli.GetPathContent(owner, repo, path, "master")
-	if err != nil {
-		return nil, err
-	}
-
-	c, err := base64.StdEncoding.DecodeString(content.Content)
-	if err != nil {
-		return nil, err
-	}
-
-	return c, nil
+	return r, nil
 }
 
 func (bot *robot) createLabelIfNeed(org, repo, label string) error {
@@ -221,25 +197,4 @@ func (bot *robot) createLabelIfNeed(org, repo, label string) error {
 	}
 
 	return bot.cli.CreateRepoLabel(org, repo, label, "")
-}
-
-// interceptString intercept the substring between the last matching `start` and the first matching `end` in a string.
-// for example: enter abab12389898 ab 98 will return ab123898".
-func interceptString(s, start, end string) string {
-	if s == "" || start == "" || end == "" {
-		return s
-	}
-
-	eIdx := strings.Index(s, end)
-	if eIdx == -1 {
-		return ""
-	}
-
-	eIdx += len(end)
-	sIdx := strings.LastIndex(s[:eIdx], start)
-	if eIdx == -1 {
-		return ""
-	}
-
-	return s[sIdx:eIdx]
 }

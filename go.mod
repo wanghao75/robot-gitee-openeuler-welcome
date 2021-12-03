@@ -3,8 +3,8 @@ module github.com/opensourceways/robot-gitee-openeuler-welcome
 go 1.15
 
 require (
-	gitee.com/openeuler/go-gitee v0.0.0-20211118064030-1aa4f942207c
-	github.com/opensourceways/community-robot-lib v0.0.0-20211123022627-feebb9ce4a77
+	gitee.com/openeuler/go-gitee v0.0.0-20211203025010-125370920041
+	github.com/opensourceways/community-robot-lib v0.0.0-20211127100111-9925e60f0b14
 	github.com/sirupsen/logrus v1.8.1
-	gopkg.in/yaml.v2 v2.4.0 // indirect
+	sigs.k8s.io/yaml v1.2.0
 )

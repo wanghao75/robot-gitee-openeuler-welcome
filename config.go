@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	libconfig "github.com/opensourceways/community-robot-lib/config"
 )
@@ -54,15 +55,18 @@ func (c *configuration) SetDefault() {
 
 type botConfig struct {
 	libconfig.PluginForRepo
-	// CommunityName displayed in welcome message
+
+	// CommunityName is the name of community
 	CommunityName string `json:"community_name" required:"true"`
-	// CommunityRepository name of the community's information management repository
-	CommunityRepository string `json:"community_repository" required:"true"`
-	// CommandLink the command help document link displayed in the welcome message
+
+	// CommandLink is the link to command help document page.
 	CommandLink string `json:"command_link" required:"true"`
-	// SigFilePath file path of the operation information maintenance of all
+
+	// SigFilePath is file path and the file includes information about
 	// Special Interest Groups (SIG) in the community.
-	SigFilePath string `json:"sig_file_path" required:"true"`
+	// The format is org/repo/branch:path
+	SigFilePath string     `json:"sig_file_path" required:"true"`
+	sigFile     fileOfRepo `json:"-"`
 }
 
 func (c *botConfig) setDefault() {
@@ -72,8 +76,44 @@ func (c *botConfig) validate() error {
 	if c.CommunityName == "" {
 		return fmt.Errorf("the community_name configuration can not be empty")
 	}
+
 	if c.CommandLink == "" {
 		return fmt.Errorf("the command_link configuration can not be empty")
 	}
+
+	if err := c.parseSigFilePath(); err != nil {
+		return err
+	}
+
 	return c.PluginForRepo.Validate()
+}
+
+func (c *botConfig) parseSigFilePath() error {
+	p := c.SigFilePath
+
+	v := strings.Split(p, ":")
+	if len(v) != 2 {
+		return fmt.Errorf("invalid sig_file_path:%s", p)
+	}
+
+	v1 := strings.Split(v[1], "/")
+	if len(v1) != 3 {
+		return fmt.Errorf("invalid sig_file_path:%s", p)
+	}
+
+	c.sigFile = fileOfRepo{
+		org:    v1[0],
+		repo:   v1[1],
+		branch: v1[2],
+		path:   v[1],
+	}
+
+	return nil
+}
+
+type fileOfRepo struct {
+	org    string
+	repo   string
+	branch string
+	path   string
 }
