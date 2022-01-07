@@ -1,45 +1,73 @@
 package main
 
 import (
-	"encoding/base64"
-
-	"sigs.k8s.io/yaml"
-
-	"github.com/opensourceways/robot-gitee-openeuler-welcome/community"
+	"strings"
 )
 
-func (bot *robot) getSigOfRepo(repo string, cfg *botConfig) (string, error) {
-	c, err := bot.loadFile(cfg.sigFile)
+func (bot *robot) getSigOfRepo(org, repo string, cfg *botConfig) (string, error) {
+	sigName, err := bot.findSigName(org, repo, cfg, true)
 	if err != nil {
-		return "", err
+		return sigName, err
 	}
 
-	s := new(community.Sigs)
-	if err := decodeYamlFile(c, s); err != nil {
-		return "", err
-	}
-
-	if err := s.Validate(); err != nil {
-		return "", err
-	}
-
-	return s.GetSig(repo), nil
+	return sigName, nil
 }
 
-func (bot *robot) loadFile(f fileOfRepo) (string, error) {
-	c, err := bot.cli.GetPathContent(f.org, f.repo, f.path, f.branch)
-	if err != nil {
-		return "", err
+func (bot *robot) listAllFilesOfRepo(cfg *botConfig) (map[string]string, error) {
+	trees, err := bot.cli.GetDirectoryTree(cfg.CommunityName, cfg.CommunityRepo, cfg.Branch, 1)
+	if err != nil || len(trees.Tree) == 0 {
+		return nil, err
 	}
 
-	return c.Content, nil
+	r := make(map[string]string)
+
+	for i := range trees.Tree {
+		item := &trees.Tree[i]
+		if strings.Count(item.Path, "/") == 4 {
+			r[item.Path] = strings.Split(item.Path, "/")[1]
+		}
+	}
+
+	return r, nil
 }
 
-func decodeYamlFile(content string, v interface{}) error {
-	c, err := base64.StdEncoding.DecodeString(content)
-	if err != nil {
-		return err
+func (bot *robot) findSigName(org, repo string, cfg *botConfig, needRefreshTree bool) (sigName string, err error) {
+	if len(cfg.reposSig) == 0 {
+		files, err := bot.listAllFilesOfRepo(cfg)
+		if err != nil {
+			return "", err
+		}
+
+		cfg.reposSig = files
 	}
 
-	return yaml.Unmarshal(c, v)
+	for i := range cfg.reposSig {
+		if strings.Contains(i, org) && strings.Contains(i, repo) {
+			sigName = cfg.reposSig[i]
+			needRefreshTree = false
+			break
+		} else {
+			continue
+		}
+	}
+
+	if needRefreshTree {
+		files, err := bot.listAllFilesOfRepo(cfg)
+		if err != nil {
+			return "", err
+		}
+
+		cfg.reposSig = files
+
+		for i := range cfg.reposSig {
+			if strings.Contains(i, org) && strings.Contains(i, repo) {
+				sigName = cfg.reposSig[i]
+				break
+			} else {
+				continue
+			}
+		}
+	}
+
+	return sigName, nil
 }
