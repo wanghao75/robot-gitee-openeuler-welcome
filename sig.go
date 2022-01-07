@@ -20,10 +20,11 @@ func (bot *robot) listAllFilesOfRepo(cfg *botConfig) (map[string]string, error) 
 	}
 
 	r := make(map[string]string)
+	count := 4
 
 	for i := range trees.Tree {
 		item := &trees.Tree[i]
-		if strings.Count(item.Path, "/") == 4 {
+		if strings.Count(item.Path, "/") == count {
 			r[item.Path] = strings.Split(item.Path, "/")[1]
 		}
 	}
@@ -45,9 +46,8 @@ func (bot *robot) findSigName(org, repo string, cfg *botConfig, needRefreshTree 
 		if strings.Contains(i, org) && strings.Contains(i, repo) {
 			sigName = cfg.reposSig[i]
 			needRefreshTree = false
+
 			break
-		} else {
-			continue
 		}
 	}
 
@@ -62,9 +62,8 @@ func (bot *robot) findSigName(org, repo string, cfg *botConfig, needRefreshTree 
 		for i := range cfg.reposSig {
 			if strings.Contains(i, org) && strings.Contains(i, repo) {
 				sigName = cfg.reposSig[i]
+
 				break
-			} else {
-				continue
 			}
 		}
 	}
