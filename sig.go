@@ -43,7 +43,7 @@ func (bot *robot) findSigName(org, repo string, cfg *botConfig, needRefreshTree 
 	}
 
 	for i := range cfg.reposSig {
-		if strings.Contains(i, org) && strings.Contains(i, repo) {
+		if strings.Split(i, "/")[2] == org && strings.Split(strings.Split(i, "/")[4], ".yaml")[0] == repo {
 			sigName = cfg.reposSig[i]
 			needRefreshTree = false
 
@@ -67,7 +67,7 @@ func (bot *robot) findSigName(org, repo string, cfg *botConfig, needRefreshTree 
 
 func (bot *robot) fillData(reposSig map[string]string, org, repo string) (sigName string) {
 	for i := range reposSig {
-		if strings.Contains(i, org) && strings.Contains(i, repo) {
+		if strings.Split(i, "/")[2] == org && strings.Split(strings.Split(i, "/")[4], ".yaml")[0] == repo {
 			sigName = reposSig[i]
 
 			break
