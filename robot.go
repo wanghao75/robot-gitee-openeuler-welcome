@@ -29,6 +29,7 @@ type iClient interface {
 	AddPRLabel(org, repo string, number int32, label string) error
 	AddIssueLabel(org, repo, number, label string) error
 	ListCollaborators(org, repo string) ([]sdk.ProjectMember, error)
+	GetDirectoryTree(org, repo, sha string, recursive int32) (sdk.Tree, error)
 }
 
 func newRobot(cli iClient) *robot {
@@ -147,7 +148,7 @@ func (bot *robot) handle(
 }
 
 func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, string, error) {
-	sigName, err := bot.getSigOfRepo(repo, cfg)
+	sigName, err := bot.getSigOfRepo(org, repo, cfg)
 	if err != nil {
 		return "", "", err
 	}
