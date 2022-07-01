@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"net/url"
 	"os"
 
 	"github.com/opensourceways/community-robot-lib/giteeclient"
@@ -9,15 +10,22 @@ import (
 	liboptions "github.com/opensourceways/community-robot-lib/options"
 	framework "github.com/opensourceways/community-robot-lib/robot-gitee-framework"
 	"github.com/opensourceways/community-robot-lib/secret"
+	cache "github.com/opensourceways/repo-file-cache/sdk"
 	"github.com/sirupsen/logrus"
 )
 
 type options struct {
-	service liboptions.ServiceOptions
-	gitee   liboptions.GiteeOptions
+	service       liboptions.ServiceOptions
+	gitee         liboptions.GiteeOptions
+	cacheEndpoint string
+	maxRetries    int
 }
 
 func (o *options) Validate() error {
+	if _, err := url.ParseRequestURI(o.cacheEndpoint); err != nil {
+		return err
+	}
+
 	if err := o.service.Validate(); err != nil {
 		return err
 	}
@@ -30,8 +38,11 @@ func gatherOptions(fs *flag.FlagSet, args ...string) options {
 
 	o.gitee.AddFlags(fs)
 	o.service.AddFlags(fs)
+	retry := 3
+	fs.StringVar(&o.cacheEndpoint, "cache-endpoint", "", "The endpoint of repo file cache")
+	fs.IntVar(&o.maxRetries, "max-retries", retry, "The number of failed retry attempts to call the cache api")
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	return o
 }
 
@@ -51,8 +62,9 @@ func main() {
 	defer secretAgent.Stop()
 
 	c := giteeclient.NewClient(secretAgent.GetTokenGenerator(o.gitee.TokenPath))
+	s := cache.NewSDK(o.cacheEndpoint, o.maxRetries)
 
-	p := newRobot(c)
+	p := newRobot(c, s)
 
 	framework.Run(p, o.service)
 }
