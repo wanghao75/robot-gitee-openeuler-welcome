@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"strings"
-
 	"github.com/opensourceways/community-robot-lib/config"
 	framework "github.com/opensourceways/community-robot-lib/robot-gitee-framework"
 	"github.com/opensourceways/community-robot-lib/utils"
 	sdk "github.com/opensourceways/go-gitee/gitee"
+	"github.com/opensourceways/repo-file-cache/models"
+	cache "github.com/opensourceways/repo-file-cache/sdk"
 	"github.com/sirupsen/logrus"
+	"strings"
 )
 
 const (
@@ -17,6 +18,10 @@ const (
 Hi ***%s***, welcome to the %s Community.
 I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
 If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers: @%s`
+	welcomeMessage2 = `
+Hi ***%s***, welcome to the %s Community.
+I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
+If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers: @%s, any of the committers: @%s`
 )
 
 type iClient interface {
@@ -31,12 +36,13 @@ type iClient interface {
 	GetDirectoryTree(org, repo, sha string, recursive int32) (sdk.Tree, error)
 }
 
-func newRobot(cli iClient) *robot {
-	return &robot{cli: cli}
+func newRobot(cli iClient, cacheCli *cache.SDK) *robot {
+	return &robot{cli: cli, cacheCli: cacheCli}
 }
 
 type robot struct {
-	cli iClient
+	cli      iClient
+	cacheCli *cache.SDK
 }
 
 func (bot *robot) NewConfig() config.Config {
@@ -131,6 +137,9 @@ func (bot *robot) handle(
 	}
 
 	label := fmt.Sprintf("sig/%s", sigName)
+	if n := 20; len(label) > n {
+		label = label[:n]
+	}
 
 	if err := bot.createLabelIfNeed(org, repo, label); err != nil {
 		log.Errorf("create repo label:%s, err:%s", label, err.Error())
@@ -153,9 +162,16 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 		return "", "", fmt.Errorf("cant get sig name of repo: %s/%s", org, repo)
 	}
 
-	maintainers, err := bot.getMaintainers(org, repo)
+	maintainers, committers, err := bot.getMaintainers(org, repo, sigName)
 	if err != nil {
 		return "", "", err
+	}
+
+	if len(committers) != 0 {
+		return sigName, fmt.Sprintf(
+			welcomeMessage2, author, cfg.CommunityName, cfg.CommandLink,
+			sigName, sigName, strings.Join(maintainers, " , @"), strings.Join(committers, " , @"),
+		), nil
 	}
 
 	return sigName, fmt.Sprintf(
@@ -164,10 +180,10 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 	), nil
 }
 
-func (bot *robot) getMaintainers(org, repo string) ([]string, error) {
+func (bot *robot) getMaintainers(org, repo, sigName string) ([]string, []string, error) {
 	v, err := bot.cli.ListCollaborators(org, repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	r := make([]string, 0, len(v))
@@ -177,7 +193,27 @@ func (bot *robot) getMaintainers(org, repo string) ([]string, error) {
 			r = append(r, v[i].Login)
 		}
 	}
-	return r, nil
+
+	f, err := bot.getFiles("openeuler", "community", "master", "OWNERS")
+	if len(f.Files) != 0 {
+		return r, nil, err
+	}
+
+	s, err := bot.getFiles("openeuler", "community", "master", "sig-info.yaml")
+	if len(s.Files) == 0 {
+		return r, nil, err
+	}
+
+	for _, v := range s.Files {
+		p := v.Path.FullPath()
+		if !strings.Contains(p, sigName) {
+			continue
+		}
+		maintainers, committers := decodeSigInfoFile(v.Content)
+		return maintainers.UnsortedList(), committers.UnsortedList(), nil
+	}
+
+	return r, nil, nil
 }
 
 func (bot *robot) createLabelIfNeed(org, repo, label string) error {
@@ -193,4 +229,25 @@ func (bot *robot) createLabelIfNeed(org, repo, label string) error {
 	}
 
 	return bot.cli.CreateRepoLabel(org, repo, label, "")
+}
+
+func (bot *robot) getFiles(org, repo, branch, fileName string) (models.FilesInfo, error) {
+	files, err := bot.cacheCli.GetFiles(
+		models.Branch{
+			Platform: "gitee",
+			Org:      org,
+			Repo:     repo,
+			Branch:   branch,
+		},
+		fileName, false,
+	)
+	if err != nil {
+		return models.FilesInfo{}, err
+	}
+
+	if len(files.Files) == 0 {
+		return models.FilesInfo{}, nil
+	}
+
+	return files, nil
 }
