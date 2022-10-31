@@ -308,16 +308,19 @@ func (bot *robot) findSpecialContact(org, repo string, number int32, cfg *botCon
 	}
 
 	owners := sets.NewString()
+	var mo []Maintainer
 	for _, c := range changes {
 		for _, f := range r.Relations {
 			for _, ff := range f.Path {
 				if strings.Contains(c.Filename, ff) {
-					for _, o := range f.Owner {
-						owners.Insert(o.GiteeID)
-					}
+					mo = append(mo, f.Owner...)
 				}
 			}
 		}
+	}
+
+	for _, m := range mo {
+		owners.Insert(m.GiteeID)
 	}
 
 	return owners, nil
