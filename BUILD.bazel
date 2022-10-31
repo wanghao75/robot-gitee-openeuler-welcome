@@ -24,6 +24,7 @@ go_library(
         "main.go",
         "robot.go",
         "sig.go",
+        "sig_info.go",
     ],
     importpath = "github.com/opensourceways/robot-gitee-openeuler-welcome",
     visibility = ["//visibility:private"],
