@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"github.com/opensourceways/community-robot-lib/config"
 	framework "github.com/opensourceways/community-robot-lib/robot-gitee-framework"
@@ -9,6 +10,8 @@ import (
 	"github.com/opensourceways/repo-file-cache/models"
 	cache "github.com/opensourceways/repo-file-cache/sdk"
 	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"sigs.k8s.io/yaml"
 	"strings"
 )
 
@@ -34,6 +37,8 @@ type iClient interface {
 	AddIssueLabel(org, repo, number, label string) error
 	ListCollaborators(org, repo string) ([]sdk.ProjectMember, error)
 	GetDirectoryTree(org, repo, sha string, recursive int32) (sdk.Tree, error)
+	GetPullRequestChanges(org, repo string, number int32) ([]sdk.PullRequestFiles, error)
+	AssignPR(org, repo string, number int32, logins []string) error
 }
 
 func newRobot(cli iClient, cacheCli *cache.SDK) *robot {
@@ -90,6 +95,7 @@ func (bot *robot) handlePREvent(e *sdk.PullRequestEvent, pc config.Config, log *
 		func(label string) error {
 			return bot.cli.AddPRLabel(org, repo, number, label)
 		},
+		number,
 	)
 }
 
@@ -117,6 +123,7 @@ func (bot *robot) handleIssueEvent(e *sdk.IssueEvent, pc config.Config, log *log
 		func(label string) error {
 			return bot.cli.AddIssueLabel(org, repo, number, label)
 		},
+		0,
 	)
 }
 
@@ -124,8 +131,9 @@ func (bot *robot) handle(
 	org, repo, author string,
 	cfg *botConfig, log *logrus.Entry,
 	addMsg, addLabel func(string) error,
+	number int32,
 ) error {
-	sigName, comment, err := bot.genComment(org, repo, author, cfg)
+	sigName, comment, err := bot.genComment(org, repo, author, cfg, log, number)
 	if err != nil {
 		return err
 	}
@@ -152,7 +160,7 @@ func (bot *robot) handle(
 	return mErr.Err()
 }
 
-func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, string, error) {
+func (bot robot) genComment(org, repo, author string, cfg *botConfig, log *logrus.Entry, number int32) (string, string, error) {
 	sigName, err := bot.getSigOfRepo(org, repo, cfg)
 	if err != nil {
 		return "", "", err
@@ -162,9 +170,15 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 		return "", "", fmt.Errorf("cant get sig name of repo: %s/%s", org, repo)
 	}
 
-	maintainers, committers, err := bot.getMaintainers(org, repo, sigName)
+	maintainers, committers, err := bot.getMaintainers(org, repo, sigName, number, cfg, log)
 	if err != nil {
 		return "", "", err
+	}
+
+	if cfg.NeedAssign && number != 0 {
+		if err = bot.cli.AssignPR(org, repo, number, maintainers); err != nil {
+			return "", "", err
+		}
 	}
 
 	if len(committers) != 0 {
@@ -180,7 +194,14 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 	), nil
 }
 
-func (bot *robot) getMaintainers(org, repo, sigName string) ([]string, []string, error) {
+func (bot *robot) getMaintainers(org, repo, sigName string, number int32, cfg *botConfig, log *logrus.Entry) ([]string, []string, error) {
+	if cfg.WelcomeSimpler {
+		membersToContact, err := bot.findSpecialContact(org, repo, number, cfg, log)
+		if err == nil && len(membersToContact) != 0 {
+			return membersToContact.UnsortedList(), nil, nil
+		}
+	}
+
 	v, err := bot.cli.ListCollaborators(org, repo)
 	if err != nil {
 		return nil, nil, err
@@ -250,4 +271,54 @@ func (bot *robot) getFiles(org, repo, branch, fileName string) (models.FilesInfo
 	}
 
 	return files, nil
+}
+
+func (bot *robot) findSpecialContact(org, repo string, number int32, cfg *botConfig, log *logrus.Entry) (sets.String, error) {
+	if number == 0 {
+		return nil, nil
+	}
+
+	changes, err := bot.cli.GetPullRequestChanges(org, repo, number)
+	if err != nil {
+		log.Errorf("get pr changes failed: %v", err)
+		return nil, err
+	}
+
+	filePath := cfg.FilePath
+	branch := cfg.FileBranch
+
+	content, err := bot.cli.GetPathContent(org, repo, filePath, branch)
+	if err != nil {
+		log.Errorf("get file %s/%s/%s failed, err: %v", org, repo, filePath, err)
+		return nil, err
+	}
+
+	c, err := base64.StdEncoding.DecodeString(content.Content)
+	if err != nil {
+		log.Errorf("decode string err: %v", err)
+		return nil, err
+	}
+
+	var r Relation
+
+	err = yaml.Unmarshal(c, &r)
+	if err != nil {
+		log.Errorf("yaml unmarshal failed: %v", err)
+		return nil, err
+	}
+
+	owners := sets.NewString()
+	for _, c := range changes {
+		for _, f := range r.Relations {
+			for _, ff := range f.Path {
+				if strings.Contains(c.Filename, ff) {
+					for _, o := range f.Owner {
+						owners.Insert(o.GiteeID)
+					}
+				}
+			}
+		}
+	}
+
+	return owners, nil
 }
