@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/opensourceways/community-robot-lib/config"
 	framework "github.com/opensourceways/community-robot-lib/robot-gitee-framework"
@@ -10,7 +11,9 @@ import (
 	"github.com/opensourceways/repo-file-cache/models"
 	cache "github.com/opensourceways/repo-file-cache/sdk"
 	"github.com/sirupsen/logrus"
+	"io/ioutil"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"net/http"
 	"sigs.k8s.io/yaml"
 	"strings"
 )
@@ -133,12 +136,35 @@ func (bot *robot) handle(
 	addMsg, addLabel func(string) error,
 	number int32,
 ) error {
+	mErr := utils.NewMultiErrors()
+	if number > 0 {
+		resp, err := http.Get(fmt.Sprintf("https://ipb.osinfra.cn/pulls?author=%s", author))
+		if err != nil {
+			mErr.AddError(err)
+		}
+		defer resp.Body.Close()
+		body, _ := ioutil.ReadAll(resp.Body)
+		type T struct {
+			Total int `json:"total,omitempty"`
+		}
+
+		var t T
+		err = json.Unmarshal(body, &t)
+		if err != nil {
+			mErr.AddError(err)
+		}
+
+		if t.Total == 0 {
+			if err = bot.cli.AddPRLabel(org, repo, number, "newcomer"); err != nil {
+				mErr.AddError(err)
+			}
+		}
+	}
+
 	sigName, comment, err := bot.genComment(org, repo, author, cfg, log, number)
 	if err != nil {
 		return err
 	}
-
-	mErr := utils.NewMultiErrors()
 
 	if err := addMsg(comment); err != nil {
 		mErr.AddError(err)
