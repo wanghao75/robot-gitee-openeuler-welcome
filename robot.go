@@ -203,7 +203,7 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig, log *logru
 
 	if cfg.NeedAssign && number != 0 {
 		if err = bot.cli.AssignPR(org, repo, number, maintainers); err != nil {
-			return "", "", err
+			log.Errorf("assign maintainers to pr failed: %v", err)
 		}
 	}
 
